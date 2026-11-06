@@ -44,11 +44,12 @@ def main():
     from transformers import AutoModelForCausalLM, DynamicCache
 
     if a.selftest:
+        import tempfile
         from transformers import LlamaConfig, LlamaForCausalLM
         cfg = LlamaConfig(hidden_size=64, intermediate_size=128, num_hidden_layers=2, num_attention_heads=4,
                           num_key_value_heads=2, vocab_size=512, max_position_embeddings=1024)
         model = LlamaForCausalLM(cfg).eval()
-        a.S, a.B, a.steps, a.warmup, a.key, a.out = 128, 2, 8, 2, "selftest", "/tmp/selftest_measure.csv"
+        a.S, a.B, a.steps, a.warmup, a.key, a.out = 128, 2, 8, 2, "selftest", os.path.join(tempfile.gettempdir(), "selftest_measure.csv")
         dev = "cpu"
     else:
         if not a.model_id or not a.key:

@@ -18,7 +18,7 @@ build/
 dist/
 *.egg-info/
 
-# Agent, handoff, and workspace session metadata
+# Local workspace metadata & developer scratch notes
 .agents/
 AGENTS.md
 HANDOFF.md

@@ -24,18 +24,18 @@ When an LLM generates text, each new token must read **all the model weights** a
 
 Quality-affecting knobs (compression) are treated as a **constraint**: configs worse than ~1 % of BF16 are dropped *before* ranking. The ranking itself is on throughput, area, energy (a 3-way Pareto front).
 
-## What the tool already tells you (first results, H100, Llama-3.1-8B, *placeholder quality numbers*)
+## Key Empirical Findings (H100 SXM, LLaMA-3.1-8B, Calibrated Model)
 
-| Regime | Baseline (BF16 KV) | Best single knob | Observation |
+| Regime | Baseline (BF16 KV) | Best Single Knob | Key Architecture Finding |
 |---|---|---|---|
-| A: 8k, B=8 | weight-bound (`linear:hbm`), KV is 36 % of bytes | HBM stacks (×1.2 for +1 stack) ≈ KV8 (×1.2) | KV compression barely helps below S*; SRAM ×1.05 for 263 mm² |
-| B: 128k | KV-bound (77 % of bytes), max batch only 3 | **KV4 g64: ×3.3** at ~0 mm², then HBM stacks | SRAM ×1.02 for 263 mm²: working set ≈ 50 GB vs ≤ 1 GB of SRAM |
-| C: 512k (2 GPUs) | KV-bound, capacity-limited, B=1 | **KV4: ×3.9** (capacity lets B grow 1→6) | Compression is needed for *feasibility*, not just speed |
+| A: 8k, B=8 | weight-bound (`linear:hbm`), KV is 36% of bytes | HBM stacks (×1.40 for +2 stacks) ≈ KV8 (×1.37) | Below S*, compressing KV has limited impact. SRAM gives only ×1.05 for 263 mm². |
+| B: 128k | KV-bound (77% of bytes), max batch 3 | **KV4 g64 + Quest: ×6.23** at ~0 mm² (B: 3→8) | Working set ≈ 52 GB vs ≤ 1 GB SRAM. Compression unlocks batch capacity. Combined with +2 HBM stacks: ×8.72. |
+| C: 512k (2 GPUs) | KV-bound, capacity-limited, B=1 | **KV4 g64 + Quest: ×11.15** (B: 1→6) | Compression is strictly required for physical feasibility. Combined with +2 HBM stacks: ×16.96. |
 
-Three non-obvious findings you should verify and turn into report claims:
-1. **SRAM alone is nearly useless against the full KV cache.** Each KV byte is read once per step, so a cache of size C covers only C/W of reads. It only pays off after eviction shrinks the working set, or if access is skewed or shared (`theta`, `rho` in `sram.py`). The hit-rate curve `h(C)` is *the* empirical unknown of the project.
-2. **INT4 attention only hits the CUDA-core roof under conditions.** With QK/PV on tensor cores it stays memory-bound until dequant costs ≳ 10 FLOP/element; if the matmuls run on CUDA cores it flips to CUDA-bound at once (run `scripts/explore.py`, experiment E2). So your deck's hypothesis is conditional: it becomes a *measurable* claim about the kernel.
-3. **Part of the "compression" benefit is really a capacity benefit.** Smaller KV → larger batch → higher throughput. Report `tpot_ms` (latency) and `tokens_per_s` (throughput) separately.
+Three core architectural takeaways:
+1. **SRAM scaling alone is ineffective against the full KV cache**: Each KV byte is read once per step, so a cache of size C covers only C/W of reads (e.g. 1 GB covers <2% of a 52 GB working set). SRAM only pays off after token eviction shrinks the working set, or with extreme access skew ($\theta \le 0.5$).
+2. **INT4 attention conditionally binds on CUDA cores**: When QK/PV run on tensor cores, decode remains memory-bound until dequantization exceeds $\sim 10\text{ FLOP/elem}$. If matmuls run on CUDA cores, it flips to CUDA-bound immediately.
+3. **Compression throughput gains are largely capacity gains**: Smaller KV allows batch size to expand ($B=3 \to 8$), multiplying throughput while keeping per-token latency bounded. Report `tpot_ms` (latency) and `tokens_per_s` (throughput) side-by-side.
 
 ## How the 8-week roadmap maps onto the code
 

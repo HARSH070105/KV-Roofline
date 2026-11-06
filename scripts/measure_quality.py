@@ -87,11 +87,12 @@ def main():
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     if a.selftest:
+        import tempfile
         from transformers import LlamaConfig, LlamaForCausalLM
         cfg = LlamaConfig(hidden_size=64, intermediate_size=128, num_hidden_layers=2, num_attention_heads=4,
                           num_key_value_heads=2, vocab_size=512, max_position_embeddings=1024)
         model, dev = LlamaForCausalLM(cfg).eval(), "cpu"
-        a.contexts, a.bits, a.groups, a.max_chunks, a.dataset, a.out = [64, 128], [8, 4], [16], 2, "random", "/tmp/selftest_quality.csv"
+        a.contexts, a.bits, a.groups, a.max_chunks, a.dataset, a.out = [64, 128], [8, 4], [16], 2, "random", os.path.join(tempfile.gettempdir(), "selftest_quality.csv")
         tokens = torch.randint(0, 512, (1, 4096))
     else:
         dev = "cuda"
