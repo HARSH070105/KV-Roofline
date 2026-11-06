@@ -1,0 +1,6 @@
+# GPU extras (weeks 5-6)
+torch
+transformers
+datasets
+pynvml
+# optional: vllm, kvpress, lm-eval
