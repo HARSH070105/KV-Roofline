@@ -1,0 +1,3 @@
+model,config,S,B,dominant
+llama3-70b,INT4 KV,2048,512,linear:tensor
+llama3-70b,INT4 KV + W8,2048,256,linear:tensor

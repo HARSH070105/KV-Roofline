@@ -124,15 +124,15 @@ Regime C (Ultra-Long: 512k+) --> Capacity-Bound (Feasibility requires compressio
 
 ### Regime A: Short / Medium Context ($S = 8,192\text{ tokens}, B \le 8$)
 
-- **Workload Status**: Baseline at $B=8$ reads $15.5\text{ GB}$ of weights vs $3.8\text{ GB}$ of KV cache ($KV = 36\%$ of traffic on 8B, $12\%$ on 70B). $S^* \approx 14,000$ tokens.
+- **Workload Status**: Baseline at $B=8$ reads $15.0\text{ GB}$ of weights vs $8.6\text{ GB}$ of KV cache on LLaMA-3.1-8B ($3.8\text{ GB}$ on Qwen-2.5-7B; KV is $36\%$ of traffic on 8B, $12\%$ on 70B). $S^* \approx 14,313$ tokens.
 - **Single-Knob Comparison**:
   - **SRAM (+1024 MB)**: Speedup $1.05\times$ for $263\text{ mm}^2$ area cost. Because weights must still stream from HBM and full KV working set exceeds SRAM capacity, SRAM alone provides negligible improvement ($0.0002\text{ speedup/mm}^2$).
   - **HBM (+1 stack)**: Speedup $1.20\times$ for $69\text{ mm}^2$ ($+20\%$ bandwidth).
   - **HBM (+2 stacks)**: Speedup $1.40\times$ for $138\text{ mm}^2$ ($+40\%$ bandwidth).
-  - **Compression (INT8 / StreamingLLM)**: Speedup $1.20\times - 1.37\times$ at $0\text{ mm}^2$.
+  - **Compression (FP8 / INT4 g64 / StreamingLLM)**: Speedup $1.22\times$ (FP8 measured, $<0.1\%$ PPL) to $1.35\times$ (INT4 g64 measured, $0.25\%$ PPL), and $1.37\times$ (FP8 + StreamingLLM-4096) at $0\text{ mm}^2$.
 - **Iso-Area Winner**:
-  - At $0\text{ mm}^2$: FP8 / INT8 KV gives $1.37\times$ speedup.
-  - At $138\text{ mm}^2$: $+2$ HBM stacks + INT8 KV gives $1.92\times$ speedup.
+  - At $0\text{ mm}^2$: FP8 alone gives $1.22\times$ (or INT4 g64 gives $1.35\times$ at $0.25\%$ PPL).
+  - At $138\text{ mm}^2$: $+2$ HBM stacks + FP8 KV gives $1.71\times$ speedup ($1.89\times$ with INT4 g64, and $1.92\times$ with FP8 + Streaming-4096).
 
 ---
 

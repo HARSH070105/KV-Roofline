@@ -1,0 +1,321 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{url}
+\usepackage{subcaption}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+\begin{document}
+
+\title{Roofline-Guided Design-Space Exploration for KV-Cache-Bound Long-Context LLM Inference}
+
+\author{\IEEEauthorblockN{Harsh Kapoor, Ashlin K. Sunil, Samyak Soni, Allu Joanna Preetika}
+\IEEEauthorblockA{\textit{Department of Computer Science and Engineering} \\
+\textit{International Institute of Information Technology, Hyderabad (IIIT-H)}\\
+Hyderabad, India \\
+\{harsh.kapoor, ashlin.sunil\}@research.iiit.ac.in}
+}
+
+\maketitle
+
+\begin{abstract}
+As sequence context lengths in Large Language Models (LLMs) scale from standard horizons ($4\text{k}$--$8\text{k}$) to extreme context windows ($128\text{k}$--$512\text{k}+$ tokens), autoregressive token generation shifts fundamentally from compute-bound prefill to Key-Value (KV) cache memory-bandwidth-bound decode. Each concurrent request generates a monotonically expanding KV history that must be fetched from High-Bandwidth Memory (HBM) for every generated token, reducing arithmetic intensity to single digits ($1$--$8\text{ FLOP/Byte}$) and leaving over 90\% of peak accelerator compute units idle. To overcome this memory wall, diverse interventions have been proposed: structural attention changes (GQA, MLA), algorithmic compression (sub-4-bit quantization, token eviction), and hardware alterations (SRAM capacity scaling, additional HBM stacks). However, prior studies evaluate software compression on static commercial GPUs or assess hardware point-designs in isolation without normalizing performance gains against silicon die area ($\text{mm}^2$) and energy ($\text{pJ/bit}$) costs, while overlooking secondary overheads such as quantization metadata bloat and CUDA-core compute ceilings.
+
+In this work, we present \texttt{kvroofline}, a verified, parameterised, two-group hierarchical roofline evaluation and design-space exploration framework for long-context LLM decode. Validated against NVIDIA Nsight Compute hardware counters and real GPU latency profiling across 29 hardware-model configurations, our model achieves a $3.3\%$ Mean Absolute Percentage Error (MAPE) on HBM memory traffic and $12.9\%$ held-out MAPE on decode token latency (TPOT). Sweeping over 1,100 configurations per regime across 6 modern LLM architectures (including LLaMA-3.1-8B, LLaMA-3-70B, Qwen-2.5-7B, and DeepSeek-V2) under empirical accuracy constraints ($\le 1.0\%$ perplexity degradation), we show that: (1) In Regime A ($\le 8\text{k}$), execution is weight-dominated, where $+2$ HBM stacks plus FP8 KV yield $1.71\times$--$1.92\times$ speedup while SRAM scaling yields $<1.05\times$ for $263\text{ mm}^2$; (2) In Regime B ($128\text{k}$), INT4 group-quantized KV combined with dynamic token eviction delivers $6.23\times$ speedup at $0\text{ mm}^2$ added die area by expanding feasible batch concurrency $B: 3 \to 8$; (3) In Regime C ($512\text{k}+$ on 2 GPUs), aggressive KV compression is mandatory for physical feasibility, yielding $11.15\times$--$16.96\times$ speedup; and (4) Hardware-software co-design expands the 3D Pareto hypervolume by $+32.9\%$ to $+184.2\%$ over the union of isolated hardware or software point designs.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Large Language Models, KV Cache, Roofline Model, Arithmetic Intensity, Long Context, Memory Hierarchy, Design-Space Exploration, Quantization.
+\end{IEEEkeywords}
+
+\section{Introduction}
+Autoregressive Large Language Models (LLMs) represent the prevailing foundation for advanced conversational reasoning, code synthesis, and multi-turn autonomous agents. However, their physical serving cost is increasingly bottlenecked by memory subsystems rather than peak floating-point throughput. LLM execution bifurcates into two distinct phases:
+\begin{enumerate}
+    \item \textbf{Prefill Phase (Prompt Processing)}: Computes representations for input prompt tokens in parallel. Formulated as General Matrix Multiplications (GEMMs), it exhibits operational data reuse proportional to context length $S$, achieving high arithmetic intensity (AI) that saturates dense accelerator Tensor Cores.
+    \item \textbf{Decode Phase (Autoregressive Generation)}: Generates output tokens autoregressively, one token per sequence per iteration. Matrix projections collapse into General Matrix-Vector (GEMV) operations. While model weights are fetched once and amortized across the batch size ($B$), each active sequence requires loading its unique, accumulated Key-Value (KV) cache history from external High-Bandwidth Memory (HBM).
+\end{enumerate}
+
+As context length ($S$) expands into tens or hundreds of thousands of tokens, KV-cache memory traffic outstrips model weight traffic by up to $4\times$--$10\times$. For example, at $128\text{k}$ context on LLaMA-3-70B, a single sequence requires $42.9\text{ GB}$ of KV storage in BF16 and transfers $320\text{ KiB}$ per generated token. Under long-context generation, modern accelerators operate at single-digit arithmetic intensities ($1$--$8\text{ FLOP/Byte}$), stranding over 90\% of peak compute units in idle memory-stall cycles.
+
+To mitigate this ``KV Cache Memory Wall'', researchers have developed diverse interventions: structural attention innovations (Grouped-Query Attention \cite{ainslie2023gqa}, Multi-Head Latent Attention \cite{deepseek2024v2}, Compressed Sparse Attention \cite{deepseek2026v41flash}), algorithmic compression (sub-4-bit asymmetric quantization \cite{liu2024kivi, hooper2024kvquant}, attention-sink and dynamic token eviction \cite{xiao2023streamingllm, zhang2023h2o, tang2024quest}), and hardware alterations (on-chip SRAM cache expansion, high-stack HBM3e/HBM4 \cite{williams2009roofline}, and Processing-in-Memory \cite{duan2025hpim, liu2026pam}).
+
+Despite this extensive literature, system architects lack a unified analytical methodology to answer a foundational trade-off: \textit{Which memory-hierarchy intervention yields the highest arithmetic intensity improvement per unit of silicon die area ($\text{mm}^2$) and energy cost ($\text{pJ/bit}$ or $\text{mJ/token}$), subject to an empirical accuracy loss constraint ($\le 1\%$ quality degradation)?}
+
+This work provides that unified framework. We construct, calibrate, and validate \texttt{kvroofline}, a parameterised, two-group hierarchical roofline design-space exploration framework. We demonstrate that optimal memory-hierarchy investments shift categorically across context-length regimes, prove why on-chip SRAM scaling alone fails against unevicted KV caches, delineate the exact conditions under which low-bit dequantization binds on the FP32 CUDA-core ceiling, and quantify the substantial hypervolume advantage of hardware-software co-design.
+
+\section{Theoretical Foundations \& Mathematical Modeling}
+
+\subsection{Classical and Hierarchical Roofline Formulations}
+The classical Roofline model \cite{williams2009roofline} relates attainable execution throughput $P_{\text{attainable}}$ to peak theoretical compute capability $P_{\text{peak}}$ and memory bandwidth $BW_{\text{mem}}$:
+\begin{equation}
+P_{\text{attainable}} = \min \left( P_{\text{peak}}, BW_{\text{mem}} \times \text{AI} \right)
+\end{equation}
+The transition between bandwidth-bound and compute-bound regimes is defined by the hardware ridge point ($\text{AI}_{\text{ridge}}$):
+\begin{equation}
+\text{AI}_{\text{ridge}} = \frac{P_{\text{peak}}}{BW_{\text{mem}}} \quad [\text{FLOP/Byte}]
+\end{equation}
+For an NVIDIA H100 SXM accelerator ($P_{\text{peak}} \approx 989\text{ TFLOP/s}$ dense BF16, $BW_{\text{mem}} \approx 3.35\text{ TB/s}$), the Tensor Core ridge point sits at $\approx 295\text{ FLOP/Byte}$.
+
+\subsection{Operational Arithmetic Intensity in Token Decode}
+Consider a Transformer layer with hidden dimension $d$, $L$ total layers, $H_q$ query heads, $H_{kv}$ key-value heads, and head dimension $d_k$, where $g = H_q / H_{kv}$ denotes the head group ratio. For each generated token:
+
+\subsubsection{Weight Arithmetic Intensity ($\text{AI}_{\text{weights}}$)}
+Model weight parameters $N_{\text{weights}}$ require $2 \cdot N_{\text{weights}}$ FLOPs per sequence, reading $N_{\text{weights}} \cdot b_w$ bytes (where $b_w$ is the weight byte-width, e.g., 2 for BF16):
+\begin{equation}
+\text{AI}_{\text{weights}} = \frac{2 \cdot N_{\text{weights}} \cdot B}{N_{\text{weights}} \cdot b_w} = \frac{2B}{b_w} \quad [\text{FLOP/Byte}]
+\end{equation}
+Weight arithmetic intensity scales strictly linearly with batch size $B$. For BF16 weights ($b_w = 2$), reaching the H100 ridge point requires batch sizes $B \approx 295$, which is unattainable in long-context regimes due to memory capacity limits.
+
+\subsubsection{Attention Arithmetic Intensity ($\text{AI}_{\text{attn}}$)}
+For each past token in the context $S$, computing attention logits ($qK^T$) and context aggregation ($AV$) requires $4 \cdot d_k \cdot H_q$ operations, while streaming $2 \cdot d_k \cdot H_{kv} \cdot b$ bytes of KV data (where $b$ is the KV byte-width):
+\begin{equation}
+\text{AI}_{\text{attn}} = \frac{4 \cdot d_k \cdot H_q}{2 \cdot d_k \cdot H_{kv} \cdot b} = \frac{2g}{b} \quad [\text{FLOP/Byte}]
+\end{equation}
+\textbf{Fundamental Property}: Attention arithmetic intensity is strictly invariant to context length $S$ and batch size $B$. It depends exclusively on architectural head ratio $g$ and precision byte-width $b$:
+\begin{itemize}
+    \item Standard MHA ($g = 1$, BF16 $b = 2$): $\text{AI}_{\text{attn}} = 1.0\text{ FLOP/Byte}$.
+    \item LLaMA-3.1-8B ($g = 4$, BF16 $b = 2$): $\text{AI}_{\text{attn}} = 4.0\text{ FLOP/Byte}$.
+    \item LLaMA-3-70B ($g = 8$, BF16 $b = 2$): $\text{AI}_{\text{attn}} = 8.0\text{ FLOP/Byte}$.
+    \item LLaMA-3-70B with INT4 KV ($g = 8$, $b = 0.5$): $\text{AI}_{\text{attn}} = 32.0\text{ FLOP/Byte}$.
+\end{itemize}
+
+\subsection{Crossover Context Length ($S^*$)}
+Total memory bytes loaded per decode step is the sum of weight bytes and KV cache bytes:
+\begin{equation}
+\text{Bytes}_{\text{step}} = N_{\text{params}} \cdot b_w + B \cdot 2L \cdot H_{kv} \cdot d_k \cdot b \cdot S
+\end{equation}
+The system experiences a regime crossover from weight-dominated memory traffic to KV-cache-dominated memory traffic when $\text{Bytes}_{\text{KV}} > \text{Bytes}_{\text{weights}}$. Equating the two terms defines the crossover context length ($S^*$):
+\begin{equation}
+S^* = \frac{N_{\text{params}} \cdot b_w}{B \cdot 2L \cdot H_{kv} \cdot d_k \cdot b}
+\end{equation}
+Below $S^*$, memory traffic is governed by model weights, making weight quantization and batch scheduling paramount. Above $S^*$, KV-cache streaming dominates execution time, making KV compression, on-chip caching, and memory bandwidth the primary performance limiters. For LLaMA-3.1-8B at $B=8$, $S^* \approx 14,313$ tokens.
+
+\subsection{Hierarchical SRAM Caching Model}
+When an on-chip SRAM buffer (capacity $C_{\text{SRAM}}$) caches a fraction $h(C_{\text{SRAM}})$ of the KV working set, external HBM traffic reduces:
+\begin{equation}
+\text{Bytes}_{\text{HBM, KV}} = \text{Bytes}_{\text{KV}} \cdot (1 - h(C_{\text{SRAM}}))
+\end{equation}
+The effective arithmetic intensity seen at the HBM interface scales harmonically:
+\begin{equation}
+\text{AI}_{\text{eff}} \approx \frac{\text{AI}_{\text{attn}}}{1 - h(C_{\text{SRAM}})}
+\end{equation}
+
+\subsection{Dual Compute Roofs: Tensor Cores vs. CUDA Cores}
+Accelerators feature heterogeneous execution pipelines:
+\begin{itemize}
+    \item \textbf{Tensor Core Roof ($P_{\text{TC}}$)}: High-density matrix multiply-accumulate systolic arrays ($989\text{ TFLOP/s}$ BF16 on H100).
+    \item \textbf{CUDA Core Vector Roof ($P_{\text{CUDA}}$)}: General-purpose SIMT ALU vector pipelines ($67\text{ TFLOP/s}$ FP32 on H100).
+\end{itemize}
+While GEMV projections utilize Tensor Cores, non-GEMM attention components---Softmax, layer normalization, RoPE, and runtime low-bit dequantization---execute on CUDA cores. The effective ridge point of the CUDA core pipeline is:
+\begin{equation}
+\text{AI}_{\text{ridge, CUDA}} = \frac{67\text{ TFLOP/s}}{3.35\text{ TB/s}} \approx 20.0\text{ FLOP/Byte}
+\end{equation}
+
+\section{Structural Attention Architecture Innovations}
+Architectural modifications alter the fundamental ratio of query heads to KV heads prior to post-training compression.
+
+\subsection{Grouped-Query Attention (GQA)}
+Multi-Query Attention (MQA) \cite{shazeer2019fast} collapses all key-value heads into a single head ($H_{kv} = 1$), reducing KV traffic by $H_q\times$ at the cost of model expressivity. Grouped-Query Attention (GQA) \cite{ainslie2023gqa} partitions $H_q$ query heads into $H_{kv}$ groups, sharing one KV head per group of $g = H_q / H_{kv}$ queries. GQA has become the standard in modern models (e.g., LLaMA-3.1-8B with $g = 4$, LLaMA-3-70B with $g = 8$), reducing KV memory footprint by $75\%$--$87.5\%$ relative to MHA.
+
+\subsection{Multi-Head Latent Attention (MLA)}
+Introduced in DeepSeek-V2 \cite{deepseek2024v2}, Multi-Head Latent Attention compresses key and value vectors into a low-rank latent vector:
+\begin{equation}
+c_t^{KV} = W_{DKV} h_t, \quad c_t^{KV} \in \mathbb{R}^{d_c}
+\end{equation}
+During inference, only the latent vector $c_t^{KV}$ ($d_c = 512$) and a shared decoupled RoPE key ($d_R = 64$) are stored in the KV cache. The up-projection matrix $W_{UK}$ is absorbed into the query projection $W_Q$ during decode. Per token per layer, the cache stores only $(d_c + d_R) \cdot 2 = 1,152$ bytes in BF16, while attention computation requires:
+\begin{equation}
+\text{FLOPs}_{\text{attn, absorbed}} = 2 \cdot H_q \cdot (2 d_c + d_R) \cdot S_{\text{read}}
+\end{equation}
+For $H_q = 128$ (DeepSeek-V2), this gives $\text{AI}_{\text{attn}} \approx 241.8\text{ FLOP/Byte}$, approaching the H100 Tensor Core ridge point ($295\text{ FLOP/Byte}$).
+
+\section{Algorithmic KV Cache Compression}
+
+\subsection{Numerical Quantization and Metadata Bloat}
+Quantization maps floating-point activations to low-bit representations ($b \in \{8, 4, 2\}$ bits):
+\begin{equation}
+q = \text{clamp}\left( \left\lfloor \frac{x - z}{s} \right\rceil, -2^{b-1}, 2^{b-1} - 1 \right)
+\end{equation}
+Per-group or per-channel quantization requires storing scale ($s$) and zero-point ($z$) tensors in higher precision (typically FP16, 4 Bytes per group $G$). As observed in \cite{zheng2026interface}, metadata inflates effective stored bytes:
+\begin{equation}
+b_{\text{elem}} = \frac{\text{bits}}{8} + \frac{4}{G} \quad [\text{Bytes/scalar}]
+\end{equation}
+For INT4 with group size $G = 32$, metadata adds $+25\%$ to stored and transferred memory bytes.
+
+\subsection{Token Eviction: Dynamic Sparsity without AI Shift}
+Rather than compressing bitwidths, eviction methods bound active context length $S \le S_{\text{budget}}$:
+\begin{itemize}
+    \item \textbf{StreamingLLM} \cite{xiao2023streamingllm}: Retains initial attention-sink tokens alongside a local sliding window.
+    \item \textbf{Quest} \cite{tang2024quest}: Evaluates page-level min/max vectors to dynamically select the top-$k$ critical KV pages per decode step.
+\end{itemize}
+Eviction reduces loaded memory bytes ($\text{Bytes}_{\text{KV}} \propto S_{\text{budget}}$) and attention FLOPs ($\text{FLOPs}_{\text{attn}} \propto S_{\text{budget}}$) proportionally:
+\begin{equation}
+\text{AI}_{\text{eviction}} = \frac{4 \cdot d_k \cdot H_q \cdot S_{\text{budget}}}{2 \cdot d_k \cdot H_{kv} \cdot b \cdot S_{\text{budget}}} = \frac{2g}{b} = \text{AI}_{\text{dense}}
+\end{equation}
+Token eviction does not shift the operating point horizontally on the roofline. It moves execution down the bandwidth roof, reducing step latency and freeing capacity to accommodate larger batch sizes ($B$).
+
+\section{Hardware Interventions and Analytical Modeling}
+\begin{itemize}
+    \item \textbf{On-Chip SRAM Scaling}: SRAM access energy ($0.1$--$0.2\text{ pJ/bit}$) is over an order of magnitude lower than HBM ($3.5$--$3.9\text{ pJ/bit}$). However, SRAM bitcell scaling has stalled at advanced nodes, imposing severe silicon die area ($\text{mm}^2$) and leakage penalties.
+    \item \textbf{HBM Bandwidth Scaling}: Adding HBM stacks increases aggregate memory bandwidth and capacity, steepening the memory roof ($P = BW \times \text{AI}$) while leaving operational arithmetic intensity unchanged.
+\end{itemize}
+
+\section{Identified Research Gaps}
+Our systematic analysis reveals four foundational research gaps:
+\begin{enumerate}
+    \item \textbf{Software-Hardware Disconnect}: Prior benchmarks \cite{singh2026kvwall} evaluate KV techniques on static commercial GPUs. No framework ranks SRAM capacity, HBM bandwidth, and KV compression on a normalized hardware-aware efficiency axis ($\Delta\text{AI}/\text{mm}^2$ and $\Delta\text{AI}/\text{pJ}$).
+    \item \textbf{Incomplete Hardware DSE Models}: Existing tools (e.g., LLMCompass \cite{zhang2024llmcompass}) omit KV-compression overheads---specifically metadata memory inflation ($\approx 20\%$--$25\%$), runtime dequantization on the CUDA-core roof, and eviction indexing latency.
+    \item \textbf{Proliferation of Isolated Point Designs}: Bespoke PIM and NVM accelerator proposals evaluate static architectures without continuous sensitivity maps across memory hierarchy knobs.
+    \item \textbf{Regime-Blind Prescriptions}: Optimal memory balance shifts across context length and concurrency regimes, requiring regime-dependent prescriptions.
+\end{enumerate}
+
+\section{Analytical Co-Design Framework \& Cost Modeling}
+
+\subsection{Two-Group Serial Hierarchical Roofline Engine}
+Because model weights and the KV cache exhibit divergent arithmetic intensities, \texttt{kvroofline} splits execution into two serial groups:
+\begin{equation}
+t_{\text{group}} = \max\left( \frac{\text{FLOPs}_{\text{tensor}}}{P_{\text{tensor}}}, \frac{\text{FLOPs}_{\text{CUDA}}}{P_{\text{CUDA}}}, \frac{\text{Bytes}_{\text{HBM}}}{BW_{\text{HBM}}}, \frac{\text{Bytes}_{\text{SRAM}}}{BW_{\text{SRAM}}} \right)
+\end{equation}
+\begin{equation}
+t_{\text{step}} = t_{\text{linear}} + t_{\text{attention}} + t_{\text{comm}} + t_{\text{fixed}}, \quad \text{Tokens/s} = \frac{B}{t_{\text{step}}}
+\end{equation}
+
+\subsubsection{Linear Group (Weights)}
+$\text{FLOPs}_{\text{linear}} = 2 \cdot B \cdot \text{ActiveParams}$. For Mixture-of-Experts (MoE) architectures (e.g., DeepSeek-V2), the expected number of active routed experts touched per step across batch $B$ is modeled analytically:
+\begin{equation}
+E_{\text{touched}} = E \cdot \left(1 - \left(1 - \frac{k}{E}\right)^B\right)
+\end{equation}
+
+\subsubsection{Attention Group (KV Cache)}
+$\text{FLOPs}_{\text{attn}} = 4 \cdot H_q \cdot d_k \cdot S_{\text{read}}$ (or absorbed-MLA form). Non-GEMM operations execute on the FP32 CUDA cores:
+\begin{equation}
+\text{FLOPs}_{\text{CUDA}} = L \cdot e \cdot q_{\text{tokens}} \cdot c_{\text{deq}} + L \cdot H_q \cdot S \cdot c_{\text{softmax}}
+\end{equation}
+where $c_{\text{deq}}$ is the per-element dequantization FLOP overhead and $c_{\text{softmax}} = 5\text{ FLOP/score}$.
+
+\subsubsection{Quest Page Indexing}
+Dynamic page selection requires streaming FP16 min/max page bounds for all $S$ tokens:
+\begin{equation}
+\text{IndexBytes} = \frac{S}{\text{PageSize}} \cdot 2 \cdot H_{kv} \cdot d_k \cdot 2\text{ Bytes}
+\end{equation}
+
+\begin{table}[t]
+\caption{Sourced Microarchitectural and Technology Parameters.}
+\label{tab:hw_params}
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Parameter} & \textbf{Value} & \textbf{Sourcing / Methodology} \\
+\midrule
+SRAM Density & $3.90\text{ MB/mm}^2$ & TSMC N5/N4 6T bitcell + periphery \cite{zhang2024llmcompass} \\
+SRAM Dynamic Energy & $0.10 + 0.02\sqrt{C}\text{ pJ/b}$ & CACTI 7.0 at 5nm, H-tree wire scaling \\
+SRAM Static Leakage & $25.0\text{ mW/MB}$ & CACTI 7.0 at $85^\circ\text{C}$ junction temp \\
+HBM3 PHY Area & $14.0\text{ mm}^2\text{/stack}$ & Synopsys 1024-bit HBM3 PHY IP (N5) \\
+HBM Package Overhead & $110.0\text{ mm}^2\text{/stack}$ & TSMC CoWoS interposer footprint (0.5$\times$ wt) \\
+Effective Area / Stack & $69.0\text{ mm}^2\text{/stack}$ & $14.0\text{ mm}^2 + 0.5 \times 110.0\text{ mm}^2$ \\
+HBM3 / HBM3e Energy & $3.90\text{ / }3.50\text{ pJ/b}$ & JEDEC JESD238 standard, SK Hynix \\
+H100 SXM5 Specs & $989\text{ T, }3.35\text{ TB/s}$ & NVIDIA Hopper Architecture Whitepaper \\
+B200 Specs & $2250\text{ T, }8.0\text{ TB/s}$ & NVIDIA Blackwell Architecture Whitepaper \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Microarchitectural Sourcing and Cost Modeling}
+All cost constants are rigorously sourced from published silicon implementations and JEDEC specifications, summarized in Table~\ref{tab:hw_params}. Added die area accounts for on-chip SRAM macro overheads ($3.90\text{ MB/mm}^2$) and modular HBM PHY plus CoWoS package interposer allocation ($69.0\text{ mm}^2$ effective area per additional stack).
+
+\section{Empirical Validation \& Calibration}
+
+\subsection{HBM Byte Traffic Validation (Nsight Compute)}
+We validate our analytical memory transfer formulation against low-level hardware performance counters captured via NVIDIA Nsight Compute (\texttt{ncu}) profiling HuggingFace decode kernels across LLaMA-3.1-8B and Qwen-2.5-7B. Comparing predicted memory traffic against \texttt{dram\_\_bytes\_read.sum} across diverse contexts ($S \in [512, 16384]$) and batch sizes ($B \in [1, 8]$) yields a Mean Absolute Percentage Error (MAPE) of:
+\begin{equation}
+\text{MAPE}_{\text{HBM}} = \mathbf{3.3\%}
+\end{equation}
+
+\subsection{Decode Latency (TPOT) Calibration}
+While an uncalibrated ideal roofline exhibits $39.1\%$ error due to assuming $100\%$ bus utilization and zero driver latency, fitting two hardware calibration parameters on a training split ($bw_{\text{eff}} = 0.6038$, $t_{\text{fixed}} \approx 0.0\text{ }\mu\text{s}$) yields:
+\begin{equation}
+\text{MAPE}_{\text{TPOT, held-out}} = \mathbf{12.9\%}
+\end{equation}
+surpassing our target threshold of $\le 15\%$ on held-out GPU measurements.
+
+\subsection{Layer-Wise Consistency with LLM-Viewer}
+Cross-checking our per-layer FLOP and memory breakdown against independent analytical LLM-Viewer \cite{yuan2024llmviewer} equations across all 6 models confirms exact parity: $0.000\%$ error on KV bytes across all models, and $<0.07\%$ on dense model weight bytes and FLOPs. For MoE models, isolating routed expert weights touched per layer ($E_t \cdot 3 \cdot h \cdot m_i \cdot 2$) yields exact agreement ($0.000\%$).
+
+\section{Multi-Regime Design-Space Exploration Results}
+
+\begin{table*}[t]
+\caption{Recommended Memory-Hierarchy Configurations Across Context Regimes (Calibrated H100 SXM, LLaMA-3.1-8B).}
+\label{tab:recommendations}
+\centering
+\begin{tabular}{lllccccl}
+\toprule
+\textbf{Regime} & \textbf{Context ($S$)} & \textbf{Dominant Bottleneck} & \textbf{Recommended Intervention} & \textbf{Speedup} & \textbf{Added Area} & \textbf{$\Delta$PPL} & \textbf{Architectural Takeaway} \\
+\midrule
+\textbf{Regime A} & $8\text{k}, B \le 8$ & Weight-Bound (\texttt{linear:hbm}) & +2 HBM Stacks + FP8 KV & $\mathbf{1.71\times}$ & $138\text{ mm}^2$ & $+0.02\%$ & Below $S^*$, HBM bandwidth dominates; SRAM ROI $<1.05\times$. \\
+\textbf{Regime B} & $128\text{k}, B \le 8$ & KV-Bound (\texttt{attn:hbm}) & INT4 g64 KV + Quest 16k & $\mathbf{6.23\times}$ & $0\text{ mm}^2$ & $+0.66\%$ & Compressing KV unlocks batch concurrency $B: 3 \to 8$. \\
+\textbf{Regime C} & $512\text{k}, 2\times\text{H100}$ & Capacity-Bound & INT4 g64 + Quest + 2-GPU TP & $\mathbf{11.15\times}$ & $0\text{ mm}^2$ & $+0.89\%$ & Compression is mandatory for physical feasibility ($B: 1 \to 6$). \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+Sweeping $>1,100$ configurations per regime across 6 models under an empirical quality gate ($\Delta\text{PPL} \le 1.0\%$) produces the Pareto frontiers summarized in Table~\ref{tab:recommendations}.
+
+\subsection{Regime A (Short/Medium: $S \le 8\text{k}$)}
+In Regime A ($S < S^*$), model weight streaming constitutes $>64\%$ of total memory traffic. On-chip SRAM scaling yields negligible benefit ($<1.05\times$ speedup for $1024\text{ MB}$ at $263\text{ mm}^2$ added die area). Increasing HBM bandwidth (+2 stacks, $138\text{ mm}^2$) combined with measured FP8 KV quantization delivers $1.71\times$ speedup (and $1.89\times$ with INT4 g64) with $<0.25\%$ quality degradation.
+
+\subsection{Regime B (Long: $S = 128\text{k}$)}
+In Regime B ($S \gg S^*$), the KV working set expands to $\approx 52\text{ GB}$, accounting for $77\%$ of memory traffic. An uncompressed BF16 baseline exhausts physical memory, capping batch concurrency to $B=3$. INT4 group-quantized KV ($G=64$) combined with Quest 16k dynamic token eviction achieves $\mathbf{6.23\times}$ throughput speedup at $\mathbf{0\text{ mm}^2}$ added silicon area by expanding batch capacity from $B=3$ to $B=8$. Pairing this with $+2$ HBM stacks reaches $\mathbf{8.72\times}$ speedup.
+
+\subsection{Regime C (Ultra-Long: $S = 524\text{k}$, 2-GPU Tensor Parallel)}
+In Regime C, single-GPU execution is physically infeasible in BF16 ($68.7\text{ GB/seq}$ KV cache exceeds device capacity). Across 2 H100 GPUs, the BF16 baseline accommodates only $B=1$. INT4 g64 KV plus Quest 16k eviction reduces KV footprint to $19.3\text{ GB/seq}$, expanding concurrency to $B=6$ and achieving $\mathbf{11.15\times}$ speedup at $0\text{ mm}^2$ ($16.96\times$ with +2 HBM stacks at $B=8$).
+
+\subsection{Three Core Architectural Takeaways}
+\begin{enumerate}
+    \item \textbf{Why SRAM Scaling Alone Fails Against Unevicted KV}: Because each KV byte is streamed once per decode step, an on-chip cache of capacity $C$ covers at most a fraction $C/W$ of reads. A $1\text{ GB}$ SRAM macro covers $<2\%$ of a $52\text{ GB}$ working set. SRAM scaling only delivers positive ROI when paired with token eviction to shrink the active working set into on-chip cache dimensions.
+    \item \textbf{Conditional CUDA-Core Ceiling Binding}: When attention QK/PV matmuls run on Tensor Cores, decode remains memory-bound until dequantization FLOP overhead exceeds:
+    \begin{equation}
+    c_{\text{deq}}^* \approx \text{AI}_{\text{ridge, CUDA}} \times b_{\text{elem}}
+    \end{equation}
+    On H100, $c_{\text{deq}}^* \approx 11.2\text{ FLOP/elem}$ for INT4 g64. Standard kernels ($c_{\text{deq}} = 6$) remain memory-bound. However, on next-generation accelerators like NVIDIA B200 where $\text{AI}_{\text{ridge, CUDA}} \le 10\text{ FLOP/B}$, INT4 and INT2 formats collide with the CUDA ceiling, producing identical throughput across bitwidths.
+    \item \textbf{Capacity-Driven Batch Expansion}: KV compression throughput gains are primarily capacity-driven: shrinking KV footprint enables batch concurrency expansion ($B: 3 \to 8$ in Regime B, $1 \to 6$ in Regime C), multiplying throughput while maintaining bounded token latency.
+\end{enumerate}
+
+\subsection{Workstream 1: Bottleneck Oscillation}
+Evaluating feasible $(S, B)$ configurations reveals clear bottleneck oscillation:
+\begin{itemize}
+    \item BF16 Baseline: $23.6\%$ \texttt{attn:hbm} vs $76.4\%$ \texttt{linear:hbm}.
+    \item INT4 KV: Suppresses KV traffic, dropping \texttt{attn:hbm} to $14.1\%$ and exposing weight loading (\texttt{linear:hbm}, $85.9\%$).
+    \item INT4 KV + W8 Weights: Quantizing weights relieves the linear bottleneck, swinging \texttt{attn:hbm} back to $28.4\%$.
+\end{itemize}
+
+\subsection{Workstream 2: Decomposition of Frontier Schemes}
+Benchmarking 2025--2026 compression schemes (AATC transform coding, PM-KVQ, Expected Attention, Quest) decomposes speedup into direct latency reduction versus batch expansion:
+\begin{equation}
+\text{Speedup}_{\text{total}} = \text{Speedup}_{\text{fixed-batch}} \times \text{Speedup}_{\text{expansion}}
+\end{equation}
+For INT4 g64 + Quest in Regime B, the $6.22\times$ total speedup decomposes into $3.31\times$ fixed-batch speedup and $1.88\times$ batch-expansion multiplier. For transform coding (AATC, $c_{\text{deq}} = 12$), execution flips to CUDA-bound, capping fixed-batch speedup to $2.18\times$ despite $5.85\times$ memory compression.
+
+\subsection{Workstream 3: 3D Pareto Hypervolume Integration}
+Computing 3D hypervolume across Throughput, Area Added, and Energy per token demonstrates that Hardware-Software Co-Design achieves a substantial performance advantage over isolated point designs:
+\begin{itemize}
+    \item \textbf{Regime A}: Co-design hypervolume gain over the union of isolated hardware and software sets is $\mathbf{+184.2\%}$ for LLaMA-3.1-8B and $\mathbf{+181.3\%}$ for Qwen-2.5-7B.
+    \item \textbf{Regime B}: Co-design gain over the union is $\mathbf{+39.7\%}$ (LLaMA-3.1-8B) and $\mathbf{+59.2\%}$ (DeepSeek-V2-Lite).
+    \item \textbf{Regime C}: Co-design gain over the union is $\mathbf{+47.2\%}$ (LLaMA-3.1-8B) and $\mathbf{+32.9\%}$ (DeepSeek-V2-Lite).
+\end{itemize}
+
+\section{Conclusion}
+This paper presented \texttt{kvroofline}, a verified, parameterised, two-group hierarchical roofline evaluation and design-space exploration framework for KV-cache-bound long-context LLM decode. Validated to $3.3\%$ MAPE on HBM traffic and $12.9\%$ held-out MAPE on decode latency, our framework demonstrates that memory-hierarchy optimization is strictly regime-dependent. In short contexts ($S \le 8\text{k}$), HBM bandwidth scaling combined with moderate KV quantization dominates. In long contexts ($128\text{k}$--$512\text{k}+$), INT4 quantization paired with dynamic token eviction provides massive throughput gains ($6.2\times$--$17.0\times$) at zero silicon area overhead by unlocking batch concurrency. Finally, hardware-software co-design expands the 3D Pareto hypervolume by up to $+184.2\%$ over isolated point designs, establishing a principled foundation for future accelerator memory-hierarchy architectures.
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}
