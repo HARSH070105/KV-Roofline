@@ -1,7 +1,7 @@
 # Repository Structure: KV-Roofline
 
 **Project #13**: *Roofline-Guided Design-Space Exploration for KV-Cache-Bound Long-Context LLM Inference*
-**Repository Path**: `c:\Users\harsh\OneDrive\Desktop\KV-Roofline`
+**Repository Path**: repository root
 **Core Framework**: `kvroofline` (Pure Python / NumPy / SciPy / Pandas / Matplotlib)
 
 ---
@@ -30,7 +30,7 @@ The `KV-Roofline` repository implements a parameterised, two-group hierarchical 
         │ scripts/run_dse.py      ││ scripts/validate.py     ││ extensions/             │
         │ kvroofline/dse.py       ││ data/measurements.csv   ││   cuda_ceiling_study.py │
         │ results/*/              ││ data/hbm_bytes.csv      ││   frontier_schemes.py   │
-        │   Pareto fronts & plots ││ MAPE ≤ 15% verification ││   hypervolume_valid.py  │
+        │   Pareto fronts & plots ││ MAPE ≤ 15% verification ││ hypervolume_and_validation.py │
         └─────────────────────────┘└─────────────────────────┘└─────────────────────────┘
 ```
 
@@ -47,13 +47,10 @@ KV-Roofline/
 │
 ├── .gitignore                              # Git exclusion rules (virtual environments, checkpoints)
 ├── AGENTS.md                               # Agent orientation guidelines (handoff-first, no git push)
-├── HANDOFF.md                              # Comprehensive project handoff, status, equations & roadmap
 ├── PRESENTATION.md                         # Master slide-by-slide presentation blueprint & defense Q&A
 ├── README.md                               # Primary project README, quick start & empirical findings
 ├── requirements.txt                        # Base Python dependencies (numpy, scipy, pandas, matplotlib)
 ├── requirements-gpu.txt                    # GPU execution dependencies (torch, vllm, transformers, pynvml)
-├── run_hpc.sh                              # Turn-key shell runner with auto-hardware detection & sweeps
-├── run_hpc.slurm                           # Slurm cluster batch submission script
 │
 ├── data/                                   # Empirical benchmarking datasets and calibration
 │   ├── calib.json                          # Fitted hardware calibration parameters (bw_eff, fixed overheads)
@@ -64,6 +61,7 @@ KV-Roofline/
 ├── docs/                                   # Reports, academic literature, paper source and figures
 │   ├── amcas_lit_rev.pdf                   # Prior literature review on roofline models, MLA & KV quant
 │   ├── FINAL_PAPER.tex                     # Publication-ready IEEEtran conference paper source
+│   ├── FINAL_PAPER.pdf                     # Compiled PDF from FINAL_PAPER.tex
 │   ├── FINAL_REPORT.md                     # Complete project final report, methodology & findings
 │   ├── PROJECT_IDEA.md                     # Conceptual guide, 5 core equations & plain-language summary
 │   ├── references.bib                      # Sourced and corrected BibTeX citations
@@ -106,7 +104,6 @@ KV-Roofline/
 │   ├── hypervolume_and_validation.py       # Workstream 3: LLM-Viewer cross-check, Pareto HV & quality audit
 │   ├── inspect_dse.py                      # DSE structure, API signatures, and dataframe inspector
 │   ├── sram_budget_sweep.py                # WS2 follow-up: Eviction budget vs pinned SRAM capacity sweep
-│   ├── outputs.zip                         # Compressed archive of generated extension artifacts
 │   └── outputs/                            # Artifacts, plots, CSVs, and summaries from workstreams
 │       ├── cuda_ceiling_summary.md          # Findings on CUDA-core dequantization bottleneck flips
 │       ├── exp1_cuda_thresholds.csv        # Critical dequantization FLOP thresholds
@@ -228,12 +225,8 @@ The `extensions/` directory contains secondary research studies, extended parame
 
 ---
 
-### 3.6 Automated HPC & Multi-GPU Tooling
-
-| File                              | Description                                                                                                                                                                                                                                                                        |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`run_hpc.sh`](run_hpc.sh)       | Turn-key bash script designed for automated execution on HPC GPU clusters. Automatically detects GPU hardware (Hopper, Ampere, Ada, Blackwell), configures Python virtual environments, executes unit tests, performs live benchmarking and calibration, and runs full DSE sweeps. |
-| [`run_hpc.slurm`](run_hpc.slurm) | Slurm batch submission script configured for multi-GPU compute nodes, allocating resources and launching `run_hpc.sh`.                                                                                                                                                           |
+GPU-specific measurement scripts are available under `scripts/` and require the
+optional dependencies in `requirements-gpu.txt`.
 
 ---
 

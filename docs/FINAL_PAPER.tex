@@ -1,4 +1,4 @@
-\documentclass[conference]{IEEEtran}
+\documentclass[conference,onecolumn]{IEEEtran}
 \IEEEoverridecommandlockouts
 
 \usepackage{cite}
@@ -19,8 +19,8 @@
 
 \title{Roofline-Guided Design-Space Exploration for KV-Cache-Bound Long-Context LLM Inference}
 
-\author{\IEEEauthorblockN{Harsh Kapoor, Ashlin K. Sunil, Samyak Soni, Allu Joanna Preetika}
-\IEEEauthorblockA{\textit{Department of Computer Science and Engineering} \\
+\author{\IEEEauthorblockN{Harsh Kapoor, Ashlin K. Sunil}
+\IEEEauthorblockA{
 \textit{International Institute of Information Technology, Hyderabad (IIIT-H)}\\
 Hyderabad, India \\
 \{harsh.kapoor, ashlin.sunil\}@research.iiit.ac.in}
@@ -212,6 +212,8 @@ Dynamic page selection requires streaming FP16 min/max page bounds for all $S$ t
 \caption{Sourced Microarchitectural and Technology Parameters.}
 \label{tab:hw_params}
 \centering
+\scriptsize
+\resizebox{\columnwidth}{!}{%
 \begin{tabular}{lll}
 \toprule
 \textbf{Parameter} & \textbf{Value} & \textbf{Sourcing / Methodology} \\
@@ -227,6 +229,7 @@ H100 SXM5 Specs & $989\text{ T, }3.35\text{ TB/s}$ & NVIDIA Hopper Architecture 
 B200 Specs & $2250\text{ T, }8.0\text{ TB/s}$ & NVIDIA Blackwell Architecture Whitepaper \\
 \bottomrule
 \end{tabular}
+}
 \end{table}
 
 \subsection{Microarchitectural Sourcing and Cost Modeling}
@@ -252,10 +255,11 @@ Cross-checking our per-layer FLOP and memory breakdown against independent analy
 
 \section{Multi-Regime Design-Space Exploration Results}
 
-\begin{table*}[t]
+\begin{table}[t]
 \caption{Recommended Memory-Hierarchy Configurations Across Context Regimes (Calibrated H100 SXM, LLaMA-3.1-8B).}
 \label{tab:recommendations}
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tabular}{lllccccl}
 \toprule
 \textbf{Regime} & \textbf{Context ($S$)} & \textbf{Dominant Bottleneck} & \textbf{Recommended Intervention} & \textbf{Speedup} & \textbf{Added Area} & \textbf{$\Delta$PPL} & \textbf{Architectural Takeaway} \\
@@ -265,7 +269,8 @@ Cross-checking our per-layer FLOP and memory breakdown against independent analy
 \textbf{Regime C} & $512\text{k}, 2\times\text{H100}$ & Capacity-Bound & INT4 g64 + Quest + 2-GPU TP & $\mathbf{11.15\times}$ & $0\text{ mm}^2$ & $+0.89\%$ & Compression is mandatory for physical feasibility ($B: 1 \to 6$). \\
 \bottomrule
 \end{tabular}
-\end{table*}
+}
+\end{table}
 
 Sweeping $>1,100$ configurations per regime across 6 models under an empirical quality gate ($\Delta\text{PPL} \le 1.0\%$) produces the Pareto frontiers summarized in Table~\ref{tab:recommendations}.
 

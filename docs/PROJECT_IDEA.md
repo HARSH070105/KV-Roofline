@@ -46,6 +46,6 @@ Three core architectural takeaways:
 | 3 | Compression modules, overheads, CUDA roof, SRAM hit rate | `compression.py`, `sram.py`; `scripts/explore.py` |
 | 4 | Area + energy, **M1: tool v0** | `cost.py`; replace placeholders with CACTI + HBM pJ/bit sources; `scripts/run_dse.py` |
 | 5 | Measure with vLLM + Nsight, build Q | `measure_decode.py`, `measure_vllm.py`, `ncu_hbm_bytes.sh`, `measure_quality.py` |
-| 6 | Validate (MAPE, roof attainment), **M2** | `validate.py --fit --holdout 4`; cross-check LLM-Viewer / LLMCompass |
+| 6 | Validate (MAPE, roof attainment), **M2** | `validate.py --meas data/measurements.csv --hbm data/hbm_bytes.csv --fit --holdout 4`; cross-check LLM-Viewer / LLMCompass |
 | 7 | Quality-gated sweeps, Pareto, recommendations | `run_dse.py --quality-csv data/quality_table.csv --calib data/calib.json` |
 | 8 | Report, docs, **M3** | `results/*/RECOMMENDATIONS.md`, figures |

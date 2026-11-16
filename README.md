@@ -99,11 +99,8 @@ KV-Roofline/
 ├── README.md                           # Master project documentation & findings
 ├── PRESENTATION.md                     # Complete slide-by-slide presentation briefing & defense Q&A
 ├── DIRECTORY_STRUCTURE.md              # Detailed structural blueprint
-├── HANDOFF.md                          # Technical handoff & engineering notes
 ├── requirements.txt                    # Base dependencies (numpy, scipy, pandas, matplotlib)
 ├── requirements-gpu.txt                # GPU execution dependencies (torch, vllm, transformers)
-├── run_hpc.sh                          # Turn-key HPC runner with auto GPU detection
-├── run_hpc.slurm                       # Slurm cluster batch job script
 │
 ├── kvroofline/                         # Core Python analytical modeling library
 │   ├── __init__.py                     # Package entry point
@@ -156,6 +153,7 @@ KV-Roofline/
 ├── docs/                               # Comprehensive reports, presentation, literature review, and paper
 │   ├── FINAL_REPORT.md                 # Complete deliverables report & hardware recommendations
 │   ├── FINAL_PAPER.tex                 # Publication-ready IEEEtran conference paper source
+│   ├── FINAL_PAPER.pdf                 # Compiled PDF from FINAL_PAPER.tex
 │   ├── references.bib                  # Sourced and corrected BibTeX citations
 │   ├── PROJECT_IDEA.md                 # Conceptual summary and plain-language guide
 │   ├── amcas_lit_rev.pdf               # Mid-submission systematic literature review
@@ -185,8 +183,8 @@ python scripts/explore.py
 # 2. Layerwise breakdown & LLM-Viewer reproduction:
 python scripts/layerwise_analysis.py --compare-llm-viewer
 
-# 3. Model calibration & MAPE evaluation:
-python scripts/validate.py --fit --holdout 4
+# 3. Model calibration & held-out MAPE evaluation:
+python scripts/validate.py --meas data/measurements.csv --hbm data/hbm_bytes.csv --fit --holdout 4
 
 # 4. Full Design-Space Exploration (DSE) sweep:
 python scripts/run_dse.py --model llama3.1-8b --hw h100 --quality-csv data/quality_table.csv --calib data/calib.json
@@ -204,11 +202,5 @@ python extensions/frontier_schemes.py
 python extensions/hypervolume_and_validation.py
 ```
 
-### HPC Cluster Submission
-```bash
-# Turn-key execution with auto GPU detection:
-bash run_hpc.sh
-
-# Or submit Slurm batch job:
-sbatch run_hpc.slurm
-```
+GPU-specific measurement scripts are available under `scripts/` and require the
+optional dependencies in `requirements-gpu.txt`.

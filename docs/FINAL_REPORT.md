@@ -1,7 +1,7 @@
 # Project 13: Roofline-Guided Design-Space Exploration for KV-Cache-Bound Long-Context LLM Inference
 
 **Course Project Final Technical Report & Deliverables Summary**  
-**Team**: Harsh Kapoor, Samyak Soni, Allu Joanna Preetika, Ashlin K Sunil  
+**Team**: Harsh Kapoor, Ashlin K Sunil  
 **Target Accelerators**: NVIDIA Hopper (H100 SXM, H200), Blackwell (B200), Ampere (A100), Ada Lovelace (L4, RTX 4090)  
 **Evaluated Workloads**: LLaMA-3.1-8B, LLaMA-3-70B, DeepSeek-V2-Lite, DeepSeek-V2, Qwen-2.5-7B, LLaMA-2-7B  
 
